@@ -1,0 +1,440 @@
+//#include <Arduino.h>
+#include <Adafruit_Sensor.h>
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <Wire.h>
+#include <ArduinoJson.h>
+#include "DHT.h"
+#include <SoftwareSerial.h>
+#include "SimpleOTA.h"
+
+SimpleOTA *simpleOTA;
+
+TaskHandle_t main_loop;
+TaskHandle_t ota_task;
+
+const char* topic = "IEMA/WST/";
+const char* device_id = "ABC777";
+
+void mainLoop(void *pvParameters);
+void otaUpdate(void *pvParameters);
+
+#define DHTTYPE DHT22
+#define MYPORT_TX 41
+#define MYPORT_RX 42
+EspSoftwareSerial::UART mod;
+const byte anemometer[] = {0x01, 0x03, 0x00, 0x00, 0x00, 0x02, 0xC4, 0x0B};
+byte values[9];
+
+//  Sensor Pin Map
+#define DHTPIN 10
+#define WIND_SPEED 8
+#define RAIN_SENSOR 1
+
+//  LED Pins
+const int power_led = 11;
+const int msg_status = 12;
+
+// Replace the next variables with your SSID/Password combination
+const char* ssid[3] = {"IEMA IOT" ,"WARP", "wifi2"};
+const char* password[3] = {"Iot@iema_23", "ankg2279", "pass2"};
+
+// Add your MQTT Broker IP address, example:
+const char* mqtt_server = "test.mosquitto.org";
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+long lastMsg = 0;
+char msg[50];
+int value = 0;
+
+// Parameters
+float temperature = 0.0;
+float humidity    = 0.0;
+float windspeed   = 0.0;
+int   wind_dir    = 0;
+bool  rain        = false;
+
+bool sensorReadSuccessful = false;
+
+DHT dht(DHTPIN, DHTTYPE);
+
+void setup_wifi() {
+  delay(10);
+  bool connected_status = false;
+  int i = 0;
+  // We start by connecting to a WiFi network
+  Serial.println();
+  while(!connected_status){
+    int k = 0;
+    bool flag = false;
+    Serial.println("Connecting to ");
+    Serial.println(ssid[i]);
+    Serial.println("Password ");
+    Serial.println(password[i]);
+    WiFi.begin(ssid[i], password[i]);
+  
+    while (WiFi.status() != WL_CONNECTED) {
+//    delay(300);
+        digitalWrite(msg_status, LOW);
+        Serial.print(".");
+        digitalWrite(msg_status, HIGH);
+        delay(200); 
+        digitalWrite(msg_status, LOW);
+        delay(300);
+        if (k >= 20){
+          flag = true;
+          break;
+        } 
+        k++;  
+  }
+  if(flag){
+    if (i>=2){
+      Serial.println("Couldn't connet to WiFi!, trying again.");
+      delay(200);
+      digitalWrite(power_led, HIGH);
+      digitalWrite(msg_status, LOW);
+      delay(200);
+      digitalWrite(power_led, LOW);
+      digitalWrite(msg_status, HIGH);
+      delay(200);
+      digitalWrite(power_led, HIGH);
+      digitalWrite(msg_status, LOW);
+      delay(200);
+      digitalWrite(power_led, LOW);
+      digitalWrite(msg_status, HIGH);
+      delay(200);
+      digitalWrite(power_led, HIGH);
+      digitalWrite(msg_status, LOW);
+      delay(200);
+      digitalWrite(power_led, LOW);
+      digitalWrite(msg_status, HIGH);
+      delay(200);
+      digitalWrite(power_led, HIGH);
+      digitalWrite(msg_status, LOW);
+      delay(200);
+      digitalWrite(power_led, LOW);
+      digitalWrite(msg_status, HIGH);
+      delay(200);
+      digitalWrite(power_led, HIGH);
+      digitalWrite(msg_status, LOW);
+      delay(200);
+      digitalWrite(power_led, HIGH);
+      digitalWrite(msg_status, LOW);
+      delay(200);
+      digitalWrite(power_led, HIGH);
+      digitalWrite(msg_status, LOW);
+      delay(200);
+      digitalWrite(power_led, HIGH);
+      digitalWrite(msg_status, LOW);
+      delay(200);
+      digitalWrite(power_led, HIGH);
+      digitalWrite(msg_status, LOW);
+      delay(200);
+      digitalWrite(power_led, HIGH);
+      digitalWrite(msg_status, LOW);
+      delay(200);
+      digitalWrite(power_led, LOW);
+      digitalWrite(msg_status, LOW);
+      delay(200);
+      i = 0;
+      continue;
+      }
+    i++;
+    continue;
+  }
+  connected_status = true;
+  Serial.println("");
+  Serial.printf("\nConnected to WiFi %s\n", ssid[i]);
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
+  Serial.println("Device MAC address: ");
+  Serial.println(WiFi.macAddress());
+  }
+}
+
+void callback(char* topic, byte* message, unsigned int length) {
+  Serial.print("Message arrived on topic: ");
+  Serial.print(topic);
+  Serial.print(". Message: ");
+  String messageTemp;
+  
+  for (int i = 0; i < length; i++) {
+//    Serial.print((char)message[i]);
+    messageTemp += (char)message[i];
+  }
+  Serial.println();
+
+  // Feel free to add more if statements to control more GPIOs with MQTT
+
+  // If a message is received on the topic esp32/output, you check if the message is either "on" or "off". 
+  // Changes the output state according to the message
+  if (String(topic) == "IEMA/NODE/0xFF") {
+    Serial.println(messageTemp);
+    }
+  }
+
+
+void reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Attempt to connect
+    if (client.connect("IEMA@0xFF")) {
+      Serial.println("connected");
+      digitalWrite(power_led, HIGH);
+      // Subscribe
+      client.subscribe("IEMA/NODE/0xFF");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      digitalWrite(power_led, HIGH);
+      Serial.println(" trying again in 5 seconds...");
+      // Wait 5 seconds before retrying
+      digitalWrite(power_led, LOW);
+      delay(500);
+      digitalWrite(power_led, HIGH);
+      delay(500);
+      digitalWrite(power_led, LOW);
+      delay(500);
+      digitalWrite(power_led, HIGH);
+      delay(500);
+      digitalWrite(power_led, LOW);
+      delay(500);
+      digitalWrite(power_led, HIGH);
+      delay(500);
+      digitalWrite(power_led, LOW);
+      delay(500);
+      digitalWrite(power_led, HIGH);
+      delay(500);
+      digitalWrite(power_led, LOW);
+      delay(500);
+      digitalWrite(power_led, HIGH);
+      delay(500);
+      digitalWrite(power_led, LOW);
+      
+    }
+  }
+}
+
+int calc_windSpeed(){
+  
+   int sensorValue = analogRead(WIND_SPEED);
+   float outvoltage = sensorValue * (5.0 / 1023.0);
+//   Serial.print("outvoltage = ");
+//   Serial.print(outvoltage);
+//   Serial.println("V");
+   int speed_anemo = map(outvoltage, 0.0, 10.0, 0.0, 40.0); //The level of wind speed is proportional to the output voltage.
+//   Serial.print("wind speed is ");
+//   Serial.print(speed_anemo);
+//   Serial.println(" m/s");
+//   Serial.println();
+//   delay(500);
+    return speed_anemo;
+  
+  }
+
+void anemo_read(){
+  delay(10);
+  mod.write(anemometer, sizeof(anemometer));
+  delay(10);
+
+  unsigned long startTime = millis();
+  while (mod.available() < 9 && millis() - startTime < 1000) 
+  {
+    delay(1);
+  }
+
+  if (mod.available() >= 9)
+  { //
+    // Read the response
+    byte index = 0;
+    while (mod.available() && index < 9) 
+    {
+      values[index] = mod.read();
+      Serial.print(values[index], HEX);
+      Serial.print(" ");
+      index++;
+    }
+    Serial.println();
+ 
+    // Parse the Wind Speed value
+    int Wind_Speed_Int = int(values[3] << 8 | values[4]);
+    // Parse the Wind Direction value
+    int Wind_Direction = int(values[5] << 8 | values[6]);
+
+    float Wind_Speed_m_s = Wind_Speed_Int / 100.0;
+    float Wind_Speed_kph = Wind_Speed_m_s * 3.6; // Conversion to km/h
+ 
+    // Serial.print("Wind Speed: ");
+    // Serial.print(Wind_Speed_kph);
+    // Serial.println(" km/h");
+
+    windspeed = Wind_Speed_m_s;
+    wind_dir = Wind_Direction;
+    
+    // Serial.print("Wind Direction: ");
+    // Serial.print(Wind_Direction);
+    // Serial.println(" degrees");
+  } //
+  else
+  {
+    Serial.println("Sensor timeout or incomplete frame");
+    windspeed = 0.0;
+    wind_dir = 0.0;
+  }
+
+}
+
+void setup() {
+
+  xTaskCreatePinnedToCore(
+                    mainLoop,    /* Task function. */
+                    "loop",      /* name of task. */
+                    10000,       /* Stack size of task */
+                    NULL,        /* parameter of the task */
+                    1,           /* priority of the task */
+                    &main_loop,  /* Task handle to keep track of created task */
+                    0);          /* pin task to core 0 */                  
+  delay(500); 
+
+  
+  xTaskCreatePinnedToCore(
+                    otaUpdate,   /* Task function. */
+                    "OTA",       /* name of task. */
+                    10000,       /* Stack size of task */
+                    NULL,        /* parameter of the task */
+                    1,           /* priority of the task */
+                    &ota_task,   /* Task handle to keep track of created task */
+                    1);          /* pin task to core 1 */
+    delay(500); 
+  
+  pinMode(power_led, OUTPUT);
+  pinMode(msg_status, OUTPUT);
+  pinMode(RAIN_SENSOR, INPUT);
+  Serial.begin(115200);
+
+    mod.begin(4800, SWSERIAL_8N1, MYPORT_RX, MYPORT_TX, false);
+      if (!mod) { // If the object did not initialize, then its configuration is invalid
+          Serial.println("Invalid EspSoftwareSerial pin configuration, check config"); 
+          while (1) { // Don't continue with invalid configuration
+          delay (1000);
+          }
+      } 
+
+  dht.begin();
+  simpleOTA = new SimpleOTA();
+  simpleOTA->begin();
+  digitalWrite(power_led, HIGH);
+  delay(1000);
+  digitalWrite(power_led, LOW);
+  delay(1000);
+  digitalWrite(msg_status, HIGH);
+  delay(1000);
+  digitalWrite(msg_status, LOW);
+  delay(1000);
+  digitalWrite(power_led, HIGH);
+  delay(1000);
+  setup_wifi();
+  client.setServer(mqtt_server, 1883);
+  client.setCallback(callback);
+
+  
+
+  digitalWrite(power_led, HIGH);
+  delay(1000);
+  digitalWrite(power_led, LOW);
+  delay(1000);
+  digitalWrite(power_led, HIGH);
+  delay(1000);
+  digitalWrite(power_led, LOW);
+  delay(1000);
+  digitalWrite(power_led, HIGH);
+  delay(1000);
+  
+}  
+
+void mainLoop(void *pvParameters) {
+    delay(100);
+    if (!client.connected()) {
+      reconnect();
+    }
+    client.loop();
+
+    int resultLength = strlen(topic) + strlen(device_id) + 1;
+    char* mqtt_topic = new char[resultLength];
+    strcpy(mqtt_topic, topic);
+    strcat(mqtt_topic, device_id);
+    long now = millis();
+    if (now - lastMsg > 5000) {
+              lastMsg = now;
+          
+              float newTemperature = dht.readTemperature();
+              float newHumidity = dht.readHumidity();
+          
+              if (!isnan(newTemperature) && !isnan(newHumidity)) {
+                    temperature = newTemperature;
+                    humidity = newHumidity;
+                    sensorReadSuccessful = true;
+                   } 
+              else {
+                    temperature = 26.90;
+                    humidity = 67.96;
+                    sensorReadSuccessful = false;
+                   }
+              
+          //    temperature = dht.readTemperature();
+          //    humidity = dht.readHumidity();
+              // windspeed = calc_windSpeed();
+              anemo_read();
+              delay(10);
+              int rain_read = digitalRead(RAIN_SENSOR);
+              delay(10);
+              if(rain_read == 0)
+                rain = true ;
+              else
+                rain = false;
+              
+              StaticJsonDocument<300> JSONbuffer;
+              JsonObject JSONencoder = JSONbuffer.createNestedObject();
+             
+              JSONencoder["device"] = device_id;
+              JSONencoder["temperature"] = int(temperature*100);
+              JSONencoder["humidity"] = int(humidity*100);
+              JSONencoder["wind_speed"] = int(windspeed*100);
+              JSONencoder["wind_direction"] = wind_dir;
+              JSONencoder["rain"] = rain;
+              
+           
+              char JSONmessageBuffer[300];
+              serializeJson(JSONencoder, JSONmessageBuffer);
+              Serial.println("Sending message to MQTT topic..");
+              Serial.print(mqtt_topic);
+              Serial.println(JSONmessageBuffer);
+              
+              if (client.publish(mqtt_topic, JSONmessageBuffer, 0) == true) {
+                  Serial.println("Success sending message");
+                    digitalWrite(msg_status, HIGH);
+                    delay(70);
+                    digitalWrite(msg_status, LOW);
+                    delay(100);
+                } 
+              else {
+                  Serial.println("Error sending message");
+                  digitalWrite(msg_status, LOW);
+            }
+            }
+}
+
+void otaUpdate(void *pvParameters){
+  
+  simpleOTA->loop();
+  
+  delay(10);
+  
+  
+  }
+
+void loop() {
+  
+}
