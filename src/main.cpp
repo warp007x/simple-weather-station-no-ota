@@ -10,6 +10,13 @@
 #include <WiFiUdp.h>
 #include <Adafruit_Sensor.h>
 #include "Adafruit_BME680.h"
+#include "DFRobot_AirQualitySensor.h"
+#include <WebServer.h>
+#include <ESPmDNS.h>
+#include <Update.h>
+
+#define I2C_ADDRESS_PM    0x19
+  
 
 
 //TaskHandle_t main_loop;
@@ -24,10 +31,10 @@
 EspSoftwareSerial::UART mod;
 
 //  Sensor Pin Map
-#define DHTPIN 10
-#define WIND_SPEED 8
+#define DHTPIN 33
+#define WIND_SPEED 10
 #define uS_TO_S_FACTOR 1000000  /* Conversion factor for micro seconds to seconds */
-#define TIME_TO_SLEEP  60        /* Time ESP32 will go to sleep (in seconds) */
+#define TIME_TO_SLEEP  240        /* Time ESP32 will go to sleep (in seconds) */
 #define SEALEVELPRESSURE_HPA (1013.25)
 #define I2C_SDA 11
 #define I2C_SCL 12
@@ -36,17 +43,20 @@ EspSoftwareSerial::UART mod;
 #define MYPORT_RX 42
 
 TwoWire i2c_0 = TwoWire(0);
+WebServer server(80);
 
 Adafruit_BME680 bme(&i2c_0);
+DFRobot_AirQualitySensor particle(&i2c_0 ,I2C_ADDRESS_PM);
 
 
 //  LED Pins
-const int power_led = 11;
-const int msg_status = 12;
+const int power_led  = 39;
+const int msg_status = 40;
 
 // Replace the next variables with your SSID/Password combination
-const char* ssid[3] = {"IEMA IOT" ,"WARP", "wifi2"};
-const char* password[3] = {"Iot@iema_23", "ankg2279", "pass2"};
+const char* host = "iema_iot";
+const char* ssid[3] = {"IEMA IOT" ,"IEMA SENTINELSENSE", "WARP"};
+const char* password[3] = {"Iot@iema_23", "IEMA6012", "ankg2279"};
 
 const char* topic = "IEMA/WST/";
 char device_id[17] = "";
@@ -58,20 +68,27 @@ String formattedDate;
 String ota_time1_1 = "19:00:00";
 String ota_time1_2 = "19:00:01";
 String ota_time1_3 = "19:00:02";
+String ota_time1_4 = "19:00:03";
+String ota_time1_5 = "19:00:04";
 
 String ota_time2_1 = "03:00:00";
 String ota_time2_2 = "03:00:01";
 String ota_time2_3 = "03:00:02";
+String ota_time2_4 = "03:00:03";
+String ota_time2_5 = "03:00:04";
 
 String ota_time3_1 = "11:00:00";
 String ota_time3_2 = "11:00:01";
 String ota_time3_3 = "11:00:02";
+String ota_time3_4 = "11:00:03";
+String ota_time3_5 = "11:00:04";
 
 const char *mqtt_username = "iema_iot";
 const char *mqtt_password = "12345";
 // Add your MQTT Broker IP address, example:
-// const char* mqtt_server = "test.mosquitto.org";
-const char* mqtt_server = "192.168.50.9";
+// const char* mqtt_server = "broker.hivemq.com";
+const char* mqtt_server = "broker.emqx.io";
+// const char* mqtt_server = "192.168.50.9";
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -85,13 +102,87 @@ float temperature1  = 0.0;
 float humidity      = 0.0;
 float humidity1     = 0.0;
 float pressure      = 0.0;
-float air_quality   = 0.0;
+int air_quality     = 0.0;
 int windspeed       = 0.0;
 String dayStamp;
 String timeStamp;
+uint16_t PM2_5 = 0;
+uint16_t PM1_0 = 0;
+uint16_t PM10 = 0;
 bool sensorReadSuccessful = false;
 
 DHT dht(DHTPIN, DHTTYPE);
+
+String ranchar = "serverIndex";
+/* Style */
+String style =
+"<style>#file-input,input{width:100%;height:44px;border-radius:4px;margin:10px auto;font-size:15px}"
+"input{background:#f1f1f1;border:0;padding:0 15px}body{background:#3498db;font-family:sans-serif;font-size:14px;color:#777}"
+"#file-input{padding:0;border:1px solid #ddd;line-height:44px;text-align:left;display:block;cursor:pointer}"
+"#bar,#prgbar{background-color:#f1f1f1;border-radius:10px}#bar{background-color:#3498db;width:0%;height:10px}"
+"form{background:#fff;max-width:258px;margin:75px auto;padding:30px;border-radius:5px;text-align:center}"
+".btn{background:#3498db;color:#fff;cursor:pointer}</style>";
+
+/* Login page */
+String loginIndex = 
+"<form name=loginForm>"
+"<h1>User Login</h1>"
+"<input name=userid placeholder='User ID'> "
+"<input name=pwd placeholder=Password type=Password> "
+"<input type=submit onclick=check(this.form) class=btn value=Login></form>"
+"<script>"
+"function check(form) {"
+"if(form.userid.value=='iema_admin' && form.pwd.value=='iema@8127')"
+"{window.open('/" + ranchar + "')}"
+"else"
+"{alert('Error Password or Username')}"
+"}"
+"</script>" + style;
+ 
+/* Server Index Page */
+String serverIndex = 
+"<script src='https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js'></script>"
+"<form method='POST' action='#' enctype='multipart/form-data' id='upload_form'>"
+"<input type='file' name='update' id='file' onchange='sub(this)' style=display:none>"
+"<label id='file-input' for='file'>   Choose file...</label>"
+"<input type='submit' class=btn value='Update'>"
+"<br><br>"
+"<div id='prg'></div>"
+"<br><div id='prgbar'><div id='bar'></div></div><br></form>"
+"<script>"
+"function sub(obj){"
+"var fileName = obj.value.split('\\\\');"
+"document.getElementById('file-input').innerHTML = '   '+ fileName[fileName.length-1];"
+"};"
+"$('form').submit(function(e){"
+"e.preventDefault();"
+"var form = $('#upload_form')[0];"
+"var data = new FormData(form);"
+"$.ajax({"
+"url: '/update',"
+"type: 'POST',"
+"data: data,"
+"contentType: false,"
+"processData:false,"
+"xhr: function() {"
+"var xhr = new window.XMLHttpRequest();"
+"xhr.upload.addEventListener('progress', function(evt) {"
+"if (evt.lengthComputable) {"
+"var per = evt.loaded / evt.total;"
+"$('#prg').html('progress: ' + Math.round(per*100) + '%');"
+"$('#bar').css('width',Math.round(per*100) + '%');"
+"}"
+"}, false);"
+"return xhr;"
+"},"
+"success:function(d, s) {"
+"console.log('success!') "
+"},"
+"error: function (a, b, c) {"
+"}"
+"});"
+"});"
+"</script>" + style;
 
 RTC_DATA_ATTR int bootCount = 0;
 
@@ -385,10 +476,9 @@ void setup() {
 
   dht.begin();
   bool status;
-  status = bme.begin(); 
   
-  if (!status) {
-    Serial.println("Could not find a valid BME680 sensor, check wiring!");
+  if (!bme.begin() || !particle.begin()) {
+    Serial.println("Could not find a valid sensor, check wiring!");
     delay(5000);
   }
   // Set up oversampling and filter initialization
@@ -397,7 +487,11 @@ void setup() {
   bme.setPressureOversampling(BME680_OS_4X);
   bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
   bme.setGasHeater(320, 150); // 320*C for 150 ms
+  particle.gainVersion();
 
+  /*use mdns for host name resolution*/
+  
+  delay(1000);
   digitalWrite(power_led, HIGH);
   delay(1000);
   digitalWrite(power_led, LOW);
@@ -410,7 +504,48 @@ void setup() {
   delay(1000);
   setup_wifi();
   delay(1000);
-
+  if (!MDNS.begin(host)) { //http://iema_iot.local
+    Serial.println("Error setting up MDNS responder!");
+    while (1) {
+      delay(1000);
+    }
+  }
+  Serial.println("mDNS responder started");
+  /*return index page which is stored in serverIndex */
+  server.on("/", HTTP_GET, []() {
+    server.sendHeader("Connection", "close");
+    server.send(200, "text/html", loginIndex);
+  });
+  server.on("/" + ranchar, HTTP_GET, []() {
+    server.sendHeader("Connection", "close");
+    server.send(200, "text/html", serverIndex);
+  });
+  /*handling uploading firmware file */
+  server.on("/update", HTTP_POST, []() {
+    server.sendHeader("Connection", "close");
+    server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+    ESP.restart();
+  }, []() {
+    HTTPUpload& upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      Serial.printf("Update: %s\n", upload.filename.c_str());
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { //start with max available size
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      /* flashing firmware to ESP*/
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_END) {
+      if (Update.end(true)) { //true to set the size to the current progress
+        Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
+      } else {
+        Update.printError(Serial);
+      }
+    }
+  });
+  server.begin();
   client.setServer(mqtt_server, 1883);
   client.setCallback(callback);
 
@@ -437,11 +572,14 @@ void setup() {
 }  
 
 void loop() {
+  while (WiFi.status() != WL_CONNECTED)
+    setup_wifi();
+    server.handleClient();
     updateTimeGMT();
     delay(100);
-    if(timeStamp == ota_time1_1 || timeStamp == ota_time1_2 || timeStamp == ota_time1_3
-        || timeStamp == ota_time2_1 || timeStamp == ota_time2_2 || timeStamp == ota_time2_3 
-        || timeStamp == ota_time3_1 || timeStamp == ota_time3_2 || timeStamp == ota_time3_3){
+    if(    timeStamp == ota_time1_1 || timeStamp == ota_time1_2 || timeStamp == ota_time1_3 || timeStamp == ota_time1_4 || timeStamp == ota_time1_5
+        || timeStamp == ota_time2_1 || timeStamp == ota_time2_2 || timeStamp == ota_time2_3 || timeStamp == ota_time2_4 || timeStamp == ota_time2_5
+        || timeStamp == ota_time3_1 || timeStamp == ota_time3_2 || timeStamp == ota_time3_3 || timeStamp == ota_time3_4 || timeStamp == ota_time3_5){
     Serial.println("Going to sleep now");
     delay(1000);
     Serial.flush();
@@ -462,6 +600,15 @@ void loop() {
     if (now - lastMsg > 4000) {
               lastMsg = now;
               getBME680Readings();
+
+              PM2_5 = particle.gainParticleConcentration_ugm3(PARTICLE_PM2_5_STANDARD);
+              PM1_0 = particle.gainParticleConcentration_ugm3(PARTICLE_PM1_0_STANDARD);
+              PM10 = particle.gainParticleConcentration_ugm3(PARTICLE_PM10_STANDARD);
+              if(PM10 == 51519 && PM2_5 == 51519 && PM1_0 == 51519){
+                    PM10 = 0;
+                    PM1_0 = 0;
+                    PM2_5 = 0;
+              }
           
               float newTemperature = dht.readTemperature();
               float newHumidity = dht.readHumidity();
@@ -487,9 +634,11 @@ void loop() {
               JSONencoder["humidity"]       = roundf(humidity*100)/100.0;
               JSONencoder["pressure"]       = roundf(pressure*100)/100.0;
               JSONencoder["air_quality"]    = air_quality;
-              JSONencoder["pm_2_5"]         = 0.0;
-              JSONencoder["pm_10"]          = 0.0;
+              JSONencoder["pm_2_5"]         = PM2_5;
+              JSONencoder["pm_1_0"]         = PM1_0;
+              JSONencoder["pm_10"]          = PM10;
               JSONencoder["wind_speed"]     = windspeed;
+              JSONencoder["timestamp"]      = formattedDate;
 
               
            
